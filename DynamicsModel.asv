@@ -1,0 +1,626 @@
+classdef (Abstract) DynamicsModel < handle
+    % Abstract base class for network dynamics models
+    % Follows composition pattern - takes Network instance as dependency
+    
+    properties
+        net           % instance of Network class
+        T             % number of time steps
+        state         % current state vector (N x 1)
+        stateHistory  % state history matrix (N x T)
+        params        % struct containing model parameters
+        rngSeed       % random number generator seed for reproducibility
+        currentTime   % current simulation time step
+        dt            % time step size (for continuous models)
+    end
+    
+    properties (SetAccess = protected)
+        isInitialized = false  % flag to track initialization
+        isCompleted = false    % flag to track if simulation completed
+    end
+    
+    methods
+        function obj = DynamicsModel(net, params)
+            % Constructor for dynamics model
+            % net: Network instance
+            % params: struct with model parameters
+            
+            if ~isa(net, 'Network')
+                error('First argument must be a Network instance');
+            end
+            
+            obj.net = net;
+            obj.params = params;
+            obj.currentTime = 0;
+            
+            % Set random seed if provided
+            if isfield(params, 'seed')
+                obj.rngSeed = params.seed;
+                rng(obj.rngSeed);
+            else
+                obj.rngSeed = rng().Seed; % store current seed
+            end
+            
+            % Set time step for continuous models
+            if isfield(params, 'dt')
+                obj.dt = params.dt;
+            else
+                obj.dt = 0.01; % default time step
+            end
+        end
+        
+        function run(obj, T, varargin)
+            % Run the dynamics simulation
+            % T: number of time steps to simulate
+            % Optional parameters: 'recordEvery', 'verbose'
+            
+            p = inputParser;
+            addParameter(p, 'recordEvery', 1, @isnumeric);
+            addParameter(p, 'verbose', false, @islogical);
+            parse(p, varargin{:});
+            
+            recordEvery = p.Results.recordEvery;
+            verbose = p.Results.verbose;
+            
+            obj.T = T;
+            
+            % Initialize if not already done
+            if ~obj.isInitialized
+                obj.initialize();
+            end
+            
+            % Pre-allocate history matrix (record only every recordEvery steps)
+            recordSteps = floor(T / recordEvery);
+            obj.stateHistory = zeros(obj.net.N, recordSteps);
+            
+            if verbose
+                fprintf('Running dynamics simulation for %d time steps...\n', T);
+                if T > 1000
+                    fprintf('Progress: ');
+                end
+            end
+            
+            recordIndex = 1;
+            
+            % Main simulation loop
+            for t = 1:T
+                obj.currentTime = t;
+                obj.step(t);
+                
+                % Record state if needed
+                if mod(t, recordEvery) == 0
+                    obj.stateHistory(:, recordIndex) = obj.getState();
+                    recordIndex = recordIndex + 1;
+                end
+                
+                % Progress reporting for long simulations
+                if verbose && T > 1000 && mod(t, floor(T/10)) == 0
+                    fprintf('%d%% ', round(100*t/T));
+                end
+            end
+            
+            obj.isCompleted = true;
+            
+            if verbose
+                if T > 1000, fprintf('\n'); end
+                fprintf('Simulation completed.\n');
+            end
+        end
+        
+        function reset(obj)
+            % Reset the dynamics model to initial state
+            obj.isInitialized = false;
+            obj.isCompleted = false;
+            obj.currentTime = 0;
+            obj.state = [];
+            obj.stateHistory = [];
+            obj.T = [];
+            
+            % Reset random seed
+            if ~isempty(obj.rngSeed)
+                rng(obj.rngSeed);
+            end
+        end
+        
+        function state = getState(obj)
+            % Get current state vector
+            state = obj.state;
+        end
+        
+        function setState(obj, newState)
+            % Set current state vector
+            if length(newState) ~= obj.net.N
+                error('State vector length must match number of nodes (%d)', obj.net.N);
+            end
+            obj.state = newState(:); % ensure column vector
+        end
+        
+        function history = getStateHistory(obj)
+            % Get complete state history
+            if obj.isCompleted
+                history = obj.stateHistory;
+            else
+                warning('Simulation not completed. Returning partial history.');
+                history = obj.stateHistory;
+            end
+        end
+        
+        function activity = getPopulationActivity(obj)
+            % Get population-level activity over time
+            if isempty(obj.stateHistory)
+                error('No simulation data available. Run simulation first.');
+            end
+            
+            % This is a generic implementation - subclasses may override
+            activity = mean(obj.stateHistory, 1);
+        end
+        
+        function plotRaster(obj, varargin)
+            % Plot raster plot of network activity
+            if isempty(obj.stateHistory)
+                error('No simulation data available. Run simulation first.');
+            end
+            
+            p = inputParser;
+            addParameter(p, 'threshold', 0.5, @isnumeric);
+            addParameter(p, 'maxNodes', 100, @isnumeric);
+            parse(p, varargin{:});
+            
+            threshold = p.Results.threshold;
+            maxNodes = p.Results.maxNodes;
+            
+            % Limit number of nodes for visualization
+            if obj.net.N > maxNodes
+                nodeIndices = sort(randperm(obj.net.N, maxNodes));
+                data = obj.stateHistory(nodeIndices, :);
+                fprintf('Showing %d randomly selected nodes out of %d\n', maxNodes, obj.net.N);
+            else
+                data = obj.stateHistory;
+                nodeIndices = 1:obj.net.N;
+            end
+            
+            % Create raster plot
+            figure;
+            [nodeIdx, timeIdx] = find(data > threshold);
+            scatter(timeIdx, nodeIndices(nodeIdx), 1, 'k', 'filled');
+            
+            xlabel('Time Step');
+            ylabel('Node Index');
+            title('Network Activity Raster Plot');
+            ylim([0.5, length(nodeIndices) + 0.5]);
+            grid on;
+        end
+        
+        function plotPopulationActivity(obj)
+            % Plot population-level activity over time
+            if isempty(obj.stateHistory)
+                error('No simulation data available. Run simulation first.');
+            end
+            
+            activity = obj.getPopulationActivity();
+            
+            figure;
+            plot(1:length(activity), activity, 'LineWidth', 2);
+            xlabel('Time Step');
+            ylabel('Population Activity');
+            title('Population Activity Over Time');
+            grid on;
+        end
+        
+        function animateNetworkActivity(obj, varargin)
+            % Create an animated visualization of network activity over time
+            % Nodes are plotted on 2D surface with colors representing states
+            
+            if isempty(obj.stateHistory)
+                error('No simulation data available. Run simulation first.');
+            end
+            
+            p = inputParser;
+            addParameter(p, 'frameRate', 10, @isnumeric);           % frames per second
+            addParameter(p, 'timeStep', 1, @isnumeric);             % time step between frames
+            addParameter(p, 'nodeSize', 50, @isnumeric);            % node marker size
+            addParameter(p, 'colormap', 'default', @ischar);        % colormap name
+            addParameter(p, 'showTimeBar', true, @islogical);       % show time progress bar
+            addParameter(p, 'showColorbar', true, @islogical);      % show state colorbar
+            addParameter(p, 'title', 'Network Activity Animation', @ischar);
+            addParameter(p, 'saveGif', '', @ischar);                % save as GIF filename
+            addParameter(p, 'maxFrames', inf, @isnumeric);          % maximum number of frames
+            parse(p, varargin{:});
+            
+            frameRate = p.Results.frameRate;
+            timeStep = p.Results.timeStep;
+            nodeSize = p.Results.nodeSize;
+            colormapName = p.Results.colormap;
+            showTimeBar = p.Results.showTimeBar;
+            showColorbar = p.Results.showColorbar;
+            titleStr = p.Results.title;
+            saveGif = p.Results.saveGif;
+            maxFrames = p.Results.maxFrames;
+            
+            % Get network layout
+            if ~isempty(obj.net.coords)
+                % Use provided coordinates
+                nodePos = obj.net.coords;
+                if size(nodePos, 2) > 2
+                    nodePos = nodePos(:, 1:2); % use only first 2 dimensions
+                end
+            else
+                % Generate layout using force-directed algorithm (simplified)
+                nodePos = obj.generateNetworkLayout();
+            end
+            
+            % Determine unique states and create color mapping
+            uniqueStates = unique(obj.stateHistory(:));
+            numStates = length(uniqueStates);
+            
+            % Set up colormap
+            switch lower(colormapName)
+                case 'default'
+                    if numStates == 2
+                        colors = [0.8 0.8 0.8; 1 0.2 0.2];  % gray, red for binary
+                    elseif numStates == 3
+                        colors = [0.8 0.8 0.8; 1 0.2 0.2; 0.2 0.2 1];  % gray, red, blue
+                    else
+                        colors = jet(numStates);  % use jet colormap for many states
+                    end
+                case 'viridis'
+                    colors = viridis(numStates);
+                case 'plasma'
+                    colors = plasma(numStates);
+                case 'jet'
+                    colors = jet(numStates);
+                case 'parula'
+                    colors = parula(numStates);
+                case 'cool'
+                    colors = cool(numStates);
+                case 'hot'
+                    colors = hot(numStates);
+                otherwise
+                    try
+                        colors = eval([colormapName '(' num2str(numStates) ')']);
+                    catch
+                        warning('Unknown colormap %s, using default', colormapName);
+                        colors = jet(numStates);
+                    end
+            end
+            
+            % Create state-to-color mapping
+            stateColorMap = containers.Map();
+            for i = 1:numStates
+                stateColorMap(num2str(uniqueStates(i))) = colors(i, :);
+            end
+            
+            % Prepare figure
+            fig = figure('Position', [100, 100, 800, 600]);
+            clf;
+            
+            % Determine time frames to show
+            totalFrames = size(obj.stateHistory, 2);
+            frameIndices = 1:timeStep:min(totalFrames, maxFrames * timeStep);
+            numFrames = length(frameIndices);
+            
+            % Pre-calculate axis limits
+            xLim = [min(nodePos(:,1)) - 0.1, max(nodePos(:,1)) + 0.1];
+            yLim = [min(nodePos(:,2)) - 0.1, max(nodePos(:,2)) + 0.1];
+            
+            fprintf('Creating network activity animation with %d frames...\n', numFrames);
+            
+            % Initialize GIF writing if requested
+            if ~isempty(saveGif)
+                fprintf('Will save animation as: %s\n', saveGif);
+            end
+            
+            % Animation loop
+            for frameIdx = 1:numFrames
+                timeIdx = frameIndices(frameIdx);
+                currentStates = obj.stateHistory(:, timeIdx);
+                
+                % Clear and set up plot
+                clf;
+                hold on;
+                
+                % Draw network edges first (in background)
+                obj.drawNetworkEdges(nodePos, [0.7 0.7 0.7], 0.5);
+                
+                % Draw nodes colored by state
+                for stateIdx = 1:numStates
+                    state = uniqueStates(stateIdx);
+                    nodesInState = (currentStates == state);
+                    
+                    if any(nodesInState)
+                        scatter(nodePos(nodesInState, 1), nodePos(nodesInState, 2), ...
+                               nodeSize, colors(stateIdx, :), 'filled', ...
+                               'MarkerEdgeColor', 'k', 'LineWidth', 0.5);
+                    end
+                end
+                
+                % Set plot properties
+                axis equal;
+                xlim(xLim);
+                ylim(yLim);
+                title(sprintf('%s (t = %d)', titleStr, timeIdx), 'FontSize', 14);
+                
+                % Add colorbar
+                if showColorbar && frameIdx == 1  % only on first frame to avoid redrawing
+                    colormap(colors);
+                    cb = colorbar;
+                    cb.Label.String = 'Node State';
+                    cb.Ticks = linspace(0, 1, numStates);
+                    cb.TickLabels = arrayfun(@num2str, uniqueStates, 'UniformOutput', false);
+                end
+                
+                % Add time progress bar
+                if showTimeBar
+                    obj.drawTimeProgressBar(timeIdx, totalFrames, [xLim(1), xLim(1) + 0.3 * diff(xLim)], ...
+                                          yLim(2) - 0.05 * diff(yLim));
+                end
+                
+                % Remove axis ticks for cleaner look
+                set(gca, 'XTick', [], 'YTick', []);
+                
+                drawnow;
+                
+                % Save frame to GIF if requested
+                if ~isempty(saveGif)
+                    frame = getframe(fig);
+                    im = frame2im(frame);
+                    [imind, cm] = rgb2ind(im, 256);
+                    
+                    if frameIdx == 1
+                        imwrite(imind, cm, saveGif, 'gif', 'Loopcount', inf, 'DelayTime', 1/frameRate);
+                    else
+                        imwrite(imind, cm, saveGif, 'gif', 'WriteMode', 'append', 'DelayTime', 1/frameRate);
+                    end
+                end
+                
+                % Control frame rate
+                pause(1/frameRate);
+                
+                % Progress indicator for long animations
+                if numFrames > 50 && mod(frameIdx, max(1, floor(numFrames/10))) == 0
+                    fprintf('Progress: %.0f%%\n', 100 * frameIdx / numFrames);
+                end
+            end
+            
+            if ~isempty(saveGif)
+                fprintf('Animation saved as GIF: %s\n', saveGif);
+            end
+            
+            fprintf('Animation completed!\n');
+            
+            % Add legend explaining states
+            if numStates <= 6  % only for reasonable number of states
+                legendEntries = {};
+                legendColors = [];
+                
+                for i = 1:numStates
+                    legendEntries{end+1} = obj.getStateName(uniqueStates(i)); %#ok<AGROW>
+                    legendColors = [legendColors; colors(i, :)]; %#ok<AGROW>
+                end
+                
+                % Create invisible scatter points for legend
+                for i = 1:numStates
+                    scatter(NaN, NaN, nodeSize, legendColors(i, :), 'filled', ...
+                           'DisplayName', legendEntries{i});
+                end
+                legend('Location', 'bestoutside');
+            end
+        end
+        
+        function saveResults(obj, filepath, varargin)
+            % Save simulation results to file
+            
+            p = inputParser;
+            addParameter(p, 'saveNetwork', true, @islogical);
+            addParameter(p, 'saveParameters', true, @islogical);
+            parse(p, varargin{:});
+            
+            % Prepare data structure
+            results = struct();
+            results.stateHistory = obj.stateHistory;
+            results.T = obj.T;
+            results.currentTime = obj.currentTime;
+            results.rngSeed = obj.rngSeed;
+            results.isCompleted = obj.isCompleted;
+            results.simulationDate = datestr(now);
+            
+            if p.Results.saveParameters
+                results.params = obj.params;
+                results.dt = obj.dt;
+            end
+            
+            if p.Results.saveNetwork
+                results.network = struct();
+                results.network.A = obj.net.A;
+                results.network.N = obj.net.N;
+                results.network.directed = obj.net.directed;
+                results.network.weighted = obj.net.weighted;
+            end
+            
+            save(filepath, 'results');
+            fprintf('Results saved to %s\n', filepath);
+        end
+        
+        function summary = getSummaryStats(obj)
+            % Get summary statistics of the simulation
+            if isempty(obj.stateHistory)
+                error('No simulation data available. Run simulation first.');
+            end
+            
+            summary = struct();
+            summary.simulationLength = obj.T;
+            summary.networkSize = obj.net.N;
+            summary.meanActivity = mean(obj.stateHistory(:));
+            summary.stdActivity = std(obj.stateHistory(:));
+            summary.maxActivity = max(obj.stateHistory(:));
+            summary.minActivity = min(obj.stateHistory(:));
+            
+            % Population activity statistics
+            popActivity = obj.getPopulationActivity();
+            summary.meanPopActivity = mean(popActivity);
+            summary.stdPopActivity = std(popActivity);
+            summary.maxPopActivity = max(popActivity);
+            summary.minPopActivity = min(popActivity);
+            
+            summary.rngSeed = obj.rngSeed;
+            summary.isCompleted = obj.isCompleted;
+        end
+        
+        function displaySummary(obj)
+            % Display summary of simulation results
+            if isempty(obj.stateHistory)
+                fprintf('No simulation data available.\n');
+                return;
+            end
+            
+            summary = obj.getSummaryStats();
+            
+            fprintf('\n=== Dynamics Simulation Summary ===\n');
+            fprintf('Network size: %d nodes\n', summary.networkSize);
+            fprintf('Simulation length: %d time steps\n', summary.simulationLength);
+            fprintf('Status: %s\n', char(summary.isCompleted * "Completed" + ~summary.isCompleted * "Incomplete"));
+            fprintf('Random seed: %d\n', summary.rngSeed);
+            fprintf('\nActivity Statistics:\n');
+            fprintf('  Mean: %.4f (±%.4f)\n', summary.meanActivity, summary.stdActivity);
+            fprintf('  Range: [%.4f, %.4f]\n', summary.minActivity, summary.maxActivity);
+            fprintf('\nPopulation Activity:\n');
+            fprintf('  Mean: %.4f (±%.4f)\n', summary.meanPopActivity, summary.stdPopActivity);
+            fprintf('  Range: [%.4f, %.4f]\n', summary.minPopActivity, summary.maxPopActivity);
+            fprintf('=====================================\n\n');
+        end
+    end
+    
+    methods (Abstract, Access = protected)
+        % These methods must be implemented by concrete subclasses
+        initialize(obj)         % Initialize the model state
+        step(obj, t)           % Perform one simulation time step
+    end
+    
+    methods (Access = protected)
+        function validateParameters(obj, requiredFields)
+            % Helper method to validate that required parameters are present
+            for i = 1:length(requiredFields)
+                if ~isfield(obj.params, requiredFields{i})
+                    error('Required parameter "%s" not found in params struct', requiredFields{i});
+                end
+            end
+        end
+        
+        function recordOutputs(obj, t)
+            % Optional method for recording additional outputs
+            % Can be overridden by subclasses
+            % Default implementation does nothing
+        end
+        
+        function layout = generateNetworkLayout(obj)
+            % Generate 2D layout for network visualization using force-directed algorithm
+            % This is a simplified spring-embedded layout
+            
+            N = obj.net.N;
+            A = obj.net.A;
+            
+            % Initialize random positions
+            layout = randn(N, 2) * 0.5;
+            
+            % Force-directed layout parameters
+            numIterations = 100;
+            dt = 0.01;
+            k_spring = 0.1;      % spring constant for connected nodes
+            k_repulsion = 0.05;  % repulsion constant for all node pairs
+            damping = 0.9;       % velocity damping
+            
+            velocities = zeros(N, 2);
+            
+            % Precompute distance matrix for connected nodes
+            [connectedI, connectedJ] = find(A);
+            
+            for iter = 1:numIterations
+                forces = zeros(N, 2);
+                
+                % Repulsive forces between all pairs
+                for i = 1:N
+                    for j = i+1:N
+                        diff = layout(i, :) - layout(j, :);
+                        dist = norm(diff) + 1e-6;  % avoid division by zero
+                        
+                        if dist < 2.0  % only apply repulsion for close nodes
+                            force = k_repulsion * diff / (dist^2);
+                            forces(i, :) = forces(i, :) + force;
+                            forces(j, :) = forces(j, :) - force;
+                        end
+                    end
+                end
+                
+                % Attractive forces for connected nodes
+                for edgeIdx = 1:length(connectedI)
+                    i = connectedI(edgeIdx);
+                    j = connectedJ(edgeIdx);
+                    
+                    diff = layout(j, :) - layout(i, :);
+                    dist = norm(diff) + 1e-6;
+                    
+                    idealDist = 1.0;  % desired edge length
+                    force = k_spring * (dist - idealDist) * diff / dist;
+                    
+                    forces(i, :) = forces(i, :) + force;
+                    forces(j, :) = forces(j, :) - force;
+                end
+                
+                % Update velocities and positions
+                velocities = damping * velocities + dt * forces;
+                layout = layout + dt * velocities;
+                
+                % Cooling schedule (reduce forces over time)
+                if mod(iter, 20) == 0
+                    dt = dt * 0.95;
+                end
+            end
+        end
+        
+        function drawNetworkEdges(obj, nodePos, edgeColor, lineWidth)
+            % Helper function to draw network edges
+            A = obj.net.A;
+            
+            % Find edge indices
+            if obj.net.directed
+                [sourceNodes, targetNodes] = find(A);
+            else
+                [sourceNodes, targetNodes] = find(triu(A, 1));  % upper triangular to avoid duplicates
+            end
+            
+            % Draw edges
+            for edgeIdx = 1:length(sourceNodes)
+                i = sourceNodes(edgeIdx);
+                j = targetNodes(edgeIdx);
+                
+                plot([nodePos(i, 1), nodePos(j, 1)], [nodePos(i, 2), nodePos(j, 2)], ...
+                     'Color', edgeColor, 'LineWidth', lineWidth);
+            end
+        end
+        
+        function drawTimeProgressBar(obj, currentTime, totalTime, xRange, yPos)
+            % Helper function to draw time progress bar
+            progress = currentTime / totalTime;
+            barWidth = diff(xRange);
+            
+            % Background bar
+            rectangle('Position', [xRange(1), yPos, barWidth, 0.02], ...
+                     'FaceColor', [0.9 0.9 0.9], 'EdgeColor', 'k', 'LineWidth', 0.5);
+            
+            % Progress bar
+            if progress > 0
+                rectangle('Position', [xRange(1), yPos, barWidth * progress, 0.02], ...
+                         'FaceColor', [0.2 0.6 0.2], 'EdgeColor', 'none');
+            end
+            
+            % Time text
+            text(xRange(1) + barWidth/2, yPos + 0.01, sprintf('t = %d / %d', currentTime, totalTime), ...
+                 'HorizontalAlignment', 'center', 'VerticalAlignment', 'middle', ...
+                 'FontSize', 8, 'FontWeight', 'bold');
+        end
+        
+        function stateName = getStateName(obj, stateValue)
+            % Get descriptive name for state value (can be overridden by subclasses)
+            stateName = sprintf('State %g', stateValue);
+        end
+    end
+end
