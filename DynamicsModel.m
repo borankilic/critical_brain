@@ -206,7 +206,188 @@ classdef (Abstract) DynamicsModel < handle
             grid on;
         end
         
+        function result = cluster(obj, varargin)
+            p = inputParser;
+            addParameter(p, 'time_stamp', obj.currentTime, @isnumeric);
+            parse(p, varargin{:});
+            time_stamp = p.Results.time_stamp;
+
+            raster = obj.stateHistory;
+            adjacency_matrix = obj.net.A;
+            initial_node = 1;
+            current_cluster = {};
+            delete_index = 1;
+            status_index = 1;
+            orig_size = size(raster, 1);
+            while delete_index <= size(adjacency_matrix, 2)
+                if raster(status_index,time_stamp) == 0
+                    adjacency_matrix(delete_index, :) = [];
+                    adjacency_matrix(:, delete_index) = [];
+                    delete_index = delete_index - 1;
+                end
+                delete_index = delete_index + 1;
+                status_index = status_index + 1;
+            end
+            if size(adjacency_matrix, 1) ~= 0 
         
+            [current_cluster{1}, adjacency_matrix] = obj.find_one_cluster(adjacency_matrix, initial_node, orig_size);
+            cluster_index = 2;
+            last_initializer = 1;
+            while true
+                initial_node = obj.find_new_initializer(adjacency_matrix);
+                if initial_node == -1
+                    break;
+                end
+                [current_cluster{cluster_index}, adjacency_matrix] = obj.find_one_cluster(adjacency_matrix, ...
+                    initial_node, orig_size);
+                %%disp(current_cluster{cluster_index});
+                cluster_index = cluster_index + 1;
+                last_initializer = initial_node;
+            end
+            else
+                current_cluster = [];
+            end
+        
+            result = current_cluster;
+            
+        end
+        
+        %will add avalanche profile and branching ratio
+        function [avalanche_sizes, avalanche_durations] = avalanche(obj, stateHistory)
+            [N,M] = size(stateHistory);
+            avalanche_sizes = [];
+            avalanche_durations = [];
+            
+            in_avalanche = false;
+            current_size = 0;
+            current_duration = 0;
+            active_nodes = [];
+            
+            for t = 1:M
+                fired_nodes = find(stateHistory(t, :) > 0); % nodes that fired at time t
+                
+                if ~isempty(fired_nodes)   % at least one firing
+                    if ~in_avalanche
+                        % Start new avalanche
+                        in_avalanche = true;
+                        current_size = 0;
+                        current_duration = 0;
+                        active_nodes = [];
+                    end
+                    
+                    % Update avalanche duration
+                    current_duration = current_duration + 1;
+                    
+                    % Cluster nodes based on adjacency
+                    active_nodes = unique([active_nodes, fired_nodes]);
+                    
+                    % Add to size (number of unique activations so far)
+                    current_size = numel(active_nodes);
+                    
+                else
+                    if in_avalanche
+                        % End of avalanche → store results
+                        avalanche_sizes(end+1) = current_size;
+                        avalanche_durations(end+1) = current_duration;
+                        
+                        % Reset
+                        in_avalanche = false;
+                        current_size = 0;
+                        current_duration = 0;
+                        active_nodes = [];
+                    end
+                end
+            end
+            
+            % Handle avalanche if it ends exactly at last time step
+            if in_avalanche
+                avalanche_sizes(end+1) = current_size;
+                avalanche_durations(end+1) = current_duration;
+            end
+        end
+        
+        function result = prob_density(obj, data_list, value)
+            % data_list: vector of values (e.g. avalanche sizes, durations, cluster sizes)
+            % value: the event you want probability of (e.g. size = 3)
+            % prob: probability of observing 'value'
+            
+            count = 0;                 % initialize counter
+            total = length(data_list); % total number of elements
+            
+            for i = 1:total
+                if data_list(i) == value
+                    count = count + 1; % increment when we find a match
+                end
+            end
+            
+            result = count / total;      % relative frequency
+        end
+
+        function result = find_new_initializer(obj,adjacency_matrix)
+            result = -1;
+            % Find first node not in any existing cluster
+            if size(adjacency_matrix, 1) > 0
+                result = 1;
+            end
+        end
+        
+        function [result, new_adjacency] = find_one_cluster(obj, adjacency_matrix, initial_node, orig_size)
+            node_index = initial_node;
+            index = 1;
+            result = [initial_node];
+            while true
+                neighbors = obj.find_new_neighbors(adjacency_matrix, node_index, result);
+                addition_to_cluster = [];
+                for i = 1: length(neighbors)
+                    if neighbors(i) ~= 0
+                    addition_to_cluster = [addition_to_cluster, neighbors(i)];
+                    else
+                        break;
+                    end
+                end
+                result = [result, addition_to_cluster];
+                index = index + 1;
+                if index <= length(result)
+                    node_index = result(index);
+                else
+                    break;
+                end
+            end
+            for i = 1:length(result)
+                result(i) = result(i) + orig_size - size(adjacency_matrix, 2);
+            end
+            delete_param = orig_size - size(adjacency_matrix, 2);
+            result = sort(result, 'ascend');
+            for index = 1:length(result)
+                if size(adjacency_matrix, 1) ~= 1 
+                    adjacency_matrix(result(index) - delete_param, :) = [];
+                    adjacency_matrix(:, result(index) - delete_param) = [];
+                    delete_param = delete_param + 1;
+                else
+                    adjacency_matrix = [];
+                end
+            end
+        
+            new_adjacency = adjacency_matrix;
+        end
+        
+        %% the function below returns the indexes of the nodes that are connected
+        %% to a specified node. 
+        function result = find_new_neighbors(obj, adjacency_matrix, node_index, ...
+            current_cluster)
+           result = zeros(1, size(adjacency_matrix, 2));
+           result_index = 1;
+           for i = 1:length(result)
+               connectivity_value = adjacency_matrix(node_index, i);
+               if connectivity_value > 0 && ~ismember(i, current_cluster)
+                   result(result_index) = i;
+                   result_index = result_index + 1;
+               end
+           end
+
+
+        end
+
         
       %% Functions to animate network graphics        
         
@@ -500,19 +681,7 @@ classdef (Abstract) DynamicsModel < handle
             
             summary = struct();
             summary.simulationLength = obj.T;
-            summary.networkSize = obj.net.N;
-            summary.meanActivity = mean(obj.stateHistory(:));
-            summary.stdActivity = std(obj.stateHistory(:));
-            summary.maxActivity = max(obj.stateHistory(:));
-            summary.minActivity = min(obj.stateHistory(:));
-            
-            % Population activity statistics
-            popActivity = obj.getPopulationActivity();
-            summary.meanPopActivity = mean(popActivity);
-            summary.stdPopActivity = std(popActivity);
-            summary.maxPopActivity = max(popActivity);
-            summary.minPopActivity = min(popActivity);
-            
+            summary.networkSize = obj.net.N;            
             summary.rngSeed = obj.rngSeed;
             summary.isCompleted = obj.isCompleted;
         end
@@ -552,12 +721,7 @@ classdef (Abstract) DynamicsModel < handle
             end
         end
         
-        function recordOutputs(obj, t)
-            % Optional method for recording additional outputs
-            % Can be overridden by subclasses
-            % Default implementation does nothing
-        end
-        
+
         function layout = generateNetworkLayout(obj)
             % Generate 2D layout for network visualization using force-directed algorithm
             % This is a simplified spring-embedded layout

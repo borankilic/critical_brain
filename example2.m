@@ -2,7 +2,7 @@
 % This script demonstrates the basic functionality of the Network,
 % DynamicsModel, and GreenbergHastingsModel classes
 
-clear; clc; close all;
+%clear; clc; close all;
 
 fprintf('=== Testing Network Dynamics Classes ===\n\n');
 
@@ -10,7 +10,7 @@ fprintf('=== Testing Network Dynamics Classes ===\n\n');
 fprintf('1. Testing Network Class...\n');
 
 % Create a small-world network
-N = 50;  % number of nodes
+N = 100;  % number of nodes
 k = 6;   % initial degree
 beta = 0.3;  % rewiring probability
 

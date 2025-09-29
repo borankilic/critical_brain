@@ -2,7 +2,7 @@
 % This script demonstrates the basic functionality of the Network,
 % DynamicsModel, and GreenbergHastingsModel classes
 
-clear; clc; close all;
+%clear; clc; close all;
 
 fprintf('=== Testing Network Dynamics Classes ===\n\n');
 
@@ -37,10 +37,10 @@ fprintf('2. Testing Greenberg-Hastings Model...\n');
 
 % Set up model parameters
 params = GreenbergHastingsModel.getDefaultParams();
-params.p_external = 0.002;    % external excitation probability
-params.p_spread = 0.6;        % spreading probability
-params.refractory_length = 4; % refractory period length
-params.initial_excited = 0.05; % 5% initially excited
+params.p_external = 0.01;    % external excitation probability
+params.p_spread = 0.001;        % spreading probability
+params.refractory_length = 1; % refractory period length
+params.initial_excited = 0.5; % 5% initially excited
 params.seed = 42;             % for reproducibility
 
 fprintf('   Parameters:\n');

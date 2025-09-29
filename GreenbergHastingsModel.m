@@ -61,14 +61,14 @@ classdef GreenbergHastingsModel < DynamicsModel
                     % Treat as fraction of nodes to excite randomly
                     numToExcite = round(initial * obj.net.N);
                     excitedNodes = randperm(obj.net.N, numToExcite);
-                    obj.state(excitedNodes) = 2; % Set to excited state
+                    obj.state(excitedNodes) = 1; % Set to excited state
                     
                 elseif isvector(initial) && all(initial == round(initial))
                     % Treat as specific node indices
                     if any(initial < 1) || any(initial > obj.net.N)
                         error('Initial excited node indices out of range');
                     end
-                    obj.state(initial) = 2; % Set to excited state
+                    obj.state(initial) = 1; % Set to excited state
                     
                 else
                     error('initial_excited must be a fraction (0-1) or vector of node indices');
@@ -77,7 +77,7 @@ classdef GreenbergHastingsModel < DynamicsModel
                 % Default: excite a small random fraction
                 numToExcite = max(1, round(0.01 * obj.net.N));
                 excitedNodes = randperm(obj.net.N, numToExcite);
-                obj.state(excitedNodes) = 2; % Set to excited state
+                obj.state(excitedNodes) = 1; % Set to excited state
             end
             
             obj.isInitialized = true;
@@ -103,7 +103,7 @@ classdef GreenbergHastingsModel < DynamicsModel
             A = obj.net.A; % This should be weighted
             
             % Find excited neighbors for each node
-            excitedNodes = (currentState == 2);
+            excitedNodes = (currentState == 1);
             
             % Calculate weighted sum of excited neighbors for each node
             weightedExcitedNeighbors = A * double(excitedNodes);
@@ -113,17 +113,17 @@ classdef GreenbergHastingsModel < DynamicsModel
             % 1. Refractory nodes (state 0) transition to quiescent with probability r2
             refractoryNodes = (currentState == 0);
             transitionToQuiescent = (rand(obj.net.N, 1) < obj.r2);
-            newState(refractoryNodes & transitionToQuiescent) = 1; % → quiescent
+            newState(refractoryNodes & transitionToQuiescent) = 2; % → quiescent
             newState(refractoryNodes & ~transitionToQuiescent) = 0; % stay refractory
             
             % 2. Excited nodes (state 2) always become refractory (state 0)
-            newState(currentState == 2) = 0;
+            newState(currentState == 1) = 0;
             
             % 3. Quiescent nodes (state 1) become excited if weighted sum exceeds threshold
-            quiescentNodes = (currentState == 1);
+            quiescentNodes = (currentState == 2);
             shouldExcite = (weightedExcitedNeighbors > obj.threshold);
-            newState(quiescentNodes & shouldExcite) = 2; % → excited
-            newState(quiescentNodes & ~shouldExcite) = 1; % stay quiescent
+            newState(quiescentNodes & shouldExcite) = 1; % → excited
+            newState(quiescentNodes & ~shouldExcite) = 2; % stay quiescent
             
             % Update state
             obj.state = newState;
@@ -134,9 +134,7 @@ classdef GreenbergHastingsModel < DynamicsModel
         
         function recordOutputs(obj)
             % Record current state and update statistics
-            
-            % Call parent method to store state history
-            recordOutputs@DynamicsModel(obj);
+           
             
             % Update state-specific counters
             obj.numExcited(end+1) = sum(obj.state == 2);
@@ -150,8 +148,8 @@ classdef GreenbergHastingsModel < DynamicsModel
                 error('No simulation data available. Run simulation first.');
             end
             
-            % Count excited nodes (state == 2) at each time step
-            excitedHistory = (obj.stateHistory == 2);
+            % Count excited nodes (state == 1) at each time step
+            excitedHistory = (obj.stateHistory == 1);
             activity = sum(excitedHistory, 1) / obj.net.N;
         end
         
@@ -172,11 +170,50 @@ classdef GreenbergHastingsModel < DynamicsModel
                 error('No simulation data available. Run simulation first.');
             end
             
-            % Count quiescent nodes (state == 1) at each time step
-            quiescentHistory = (obj.stateHistory == 1);
+            % Count quiescent nodes (state == 2) at each time step
+            quiescentHistory = (obj.stateHistory == 2);
             quiescentActivity = sum(quiescentHistory, 1) / obj.net.N;
         end
         
+        function plotStateDistribution(obj)
+            % Plot distribution of node states over time
+            if isempty(obj.stateHistory)
+                error('No simulation data available. Run simulation first.');
+            end
+            
+            % Count nodes in each state at each time step
+            maxState = max(obj.stateHistory(:));
+            stateCounts = zeros(maxState + 1, size(obj.stateHistory, 2));
+            
+            for state = 0:maxState
+                stateCounts(state + 1, :) = sum(obj.stateHistory == state, 1);
+            end
+            
+            % Convert to fractions
+            stateFractions = stateCounts / obj.net.N;
+            
+            figure;
+            timeSteps = 1:size(obj.stateHistory, 2);
+            
+            % Create stacked area plot
+            area(timeSteps, stateFractions');
+            
+            % Create legend
+            legendLabels = cell(maxState + 1, 1);
+            legendLabels{1} = 'Quiescent';
+            legendLabels{2} = 'Excited';
+            for i = 3:maxState + 1
+                legendLabels{i} = sprintf('Refractory %d', i - 2);
+            end
+            
+            legend(legendLabels, 'Location', 'best');
+            xlabel('Time Step');
+            ylabel('Fraction of Nodes');
+            title('Distribution of Node States Over Time');
+            ylim([0, 1]);
+            grid on;
+        end
+
         function plotStateEvolution(obj)
             % Plot evolution of all three states over time
             if isempty(obj.stateHistory)
@@ -205,6 +242,74 @@ classdef GreenbergHastingsModel < DynamicsModel
             ylim([0, 1]);
         end
         
+                function avalanches = detectAvalanches(obj, varargin)
+            % Detect avalanche events in the dynamics
+            % An avalanche is a sequence of continuous activity above baseline
+            
+            p = inputParser;
+            addParameter(p, 'threshold', 0.01, @isnumeric);  % activity threshold
+            addParameter(p, 'minDuration', 2, @isnumeric);   % minimum avalanche duration
+            parse(p, varargin{:});
+            
+            threshold = p.Results.threshold;
+            minDuration = p.Results.minDuration;
+            
+            if isempty(obj.stateHistory)
+                error('No simulation data available. Run simulation first.');
+            end
+            
+            activity = obj.getPopulationActivity();
+            
+            % Find periods above threshold
+            aboveThreshold = activity > threshold;
+            
+            % Detect avalanche boundaries
+            avalanches = [];
+            inAvalanche = false;
+            avalancheStart = 1;
+            
+            for t = 1:length(aboveThreshold)
+                if aboveThreshold(t) && ~inAvalanche
+                    % Start of avalanche
+                    inAvalanche = true;
+                    avalancheStart = t;
+                elseif ~aboveThreshold(t) && inAvalanche
+                    % End of avalanche
+                    inAvalanche = false;
+                    duration = t - avalancheStart;
+                    
+                    if duration >= minDuration
+                        % Calculate avalanche properties
+                        avalancheActivity = activity(avalancheStart:t-1);
+                        avalanche = struct();
+                        avalanche.start = avalancheStart;
+                        avalanche.end = t - 1;
+                        avalanche.duration = duration;
+                        avalanche.size = sum(avalancheActivity);
+                        avalanche.peakActivity = max(avalancheActivity);
+                        
+                        avalanches = [avalanches, avalanche]; %#ok<AGROW>
+                    end
+                end
+            end
+            
+            % Handle case where simulation ends during avalanche
+            if inAvalanche
+                duration = length(aboveThreshold) - avalancheStart + 1;
+                if duration >= minDuration
+                    avalancheActivity = activity(avalancheStart:end);
+                    avalanche = struct();
+                    avalanche.start = avalancheStart;
+                    avalanche.end = length(aboveThreshold);
+                    avalanche.duration = duration;
+                    avalanche.size = sum(avalancheActivity);
+                    avalanche.peakActivity = max(avalancheActivity);
+                    
+                    avalanches = [avalanches, avalanche];
+                end
+            end
+        end
+
         function summary = getSummaryStats(obj)
             % Get summary statistics specific to Greenberg-Hastings model
             
@@ -272,8 +377,8 @@ classdef GreenbergHastingsModel < DynamicsModel
             % Get default parameters for Greenberg-Hastings model
             params = struct();
             params.r2 = 0.01;
-            params.threshold = 1.5;
-            params.initial_excited = 0.01;  % 1% initially excited
+            params.threshold = 0.005;
+            params.initial_excited = 0.1;  % 1% initially excited
             params.seed = 12345;            % reproducible results
         end
         

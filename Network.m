@@ -52,11 +52,11 @@ classdef Network < handle
             end
 
             % Assign coordinates if not given
-            if isempt(obj.coords)
-                G = graph(adjacency_matrix);
-                h = plot(G, 'Layout', 'force');
-                obj.coords = [h.XData; h.YData]';
-            end
+            % if isempty(obj.coords)
+            %     G = graph(A);
+            %     h = plot(G, 'Layout', 'force');
+            %     obj.coords = [h.XData; h.YData]';
+            % end
 
         end
         
@@ -91,6 +91,26 @@ classdef Network < handle
             obj.directed = p.Results.directed;
         end
         
+        function filteredMatrix = matrixfilter(A, t)
+            % A: NxN adjacency matrix
+            % t: threshold factor (e.g. 1 → mean - 1*std)
+            % A_thresh: thresholded adjacency matrix
+            
+            mu = mean(A(:));        % mean of all entries
+            sigma = std(A(:));      % standard deviation of all entries
+            threshold = mu - t * sigma;
+            
+            filteredMatrix = A;           % copy matrix
+            for i = 1:size(A,1)
+                for j = 1:size(A,2)
+                    if A(i,j) < threshold
+                        filteredMatrix(i,j) = 0;
+                    end
+                end
+            end
+        end
+
+
         function L = laplacian(obj)
             % Compute graph Laplacian matrix
             d = obj.degree();
