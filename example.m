@@ -10,46 +10,51 @@ fprintf('=== Testing Network Dynamics Classes ===\n\n');
 fprintf('1. Testing Network Class...\n');
 
 % Create a small-world network
-N = 50;  % number of nodes
+N = 200;  % number of nodes
 k = 6;   % initial degree
 beta = 0.3;  % rewiring probability
+connectivity=0.1;
+% Parameters
+N = 100;    % number of points
 
-net = Network.generateSmallWorldNetwork(N, k, beta);
 
-% Display basic network properties
-fprintf('   Network created with %d nodes\n', net.N);
-fprintf('   Network density: %.3f\n', nnz(net.A) / (N * (N-1)));
-
-% Calculate network statistics
-stats = net.getNetworkStats();
-fprintf('   Mean degree: %.2f (±%.2f)\n', stats.degree_mean, stats.degree_std);
-fprintf('   Mean clustering: %.3f (±%.3f)\n', stats.clustering_mean, stats.clustering_std);
-
-% Visualize the network
-figure(1);
-net.visualize();
-title('Small-World Network Structure');
-
-fprintf('   ✓ Network class working correctly\n\n');
+% 
+% net = Network.generateSmallWorldNetwork(N, k, beta);
+% 
+% % Display basic network properties
+% fprintf('   Network created with %d nodes\n', net.N);
+% fprintf('   Network density: %.3f\n', nnz(net.A) / (N * (N-1)));
+% 
+% % Calculate network statistics
+% stats = net.getNetworkStats();
+% fprintf('   Mean degree: %.2f (±%.2f)\n', stats.degree_mean, stats.degree_std);
+% fprintf('   Mean clustering: %.3f (±%.3f)\n', stats.clustering_mean, stats.clustering_std);
+% 
+% % Visualize the network
+% figure(1);
+% net.visualize();
+% title('Small-World Network Structure');
+% 
+% fprintf('   ✓ Network class working correctly\n\n');
 
 %% Test 2: Create Greenberg-Hastings model
 fprintf('2. Testing Greenberg-Hastings Model...\n');
 
 % Set up model parameters
 params = GreenbergHastingsModel.getDefaultParams();
-params.p_external = 0.01;    % external excitation probability
-params.p_spread = 0.001;        % spreading probability
-params.refractory_length = 1; % refractory period length
-params.initial_excited = 0.5; % 5% initially excited
+params.threshold = 0.2;
+params.r2=0.2;
+params.p_external = 0.5;    % external excitation probability
+params.initial_excited = 0.1; % 5% initially excited
 params.seed = 42;             % for reproducibility
 
 fprintf('   Parameters:\n');
 fprintf('     External excitation: %.3f\n', params.p_external);
-fprintf('     Spread probability: %.3f\n', params.p_spread);
-fprintf('     Refractory length: %d\n', params.refractory_length);
+
 
 % Create the dynamics model
-ghModel = GreenbergHastingsModel(net, params);
+ghModel = GreenbergHastingsModel.createWithRandomNetwork(N, connectivity, 'params', params);
+ghModel.net.coords = coords;
 
 fprintf('   ✓ Model created successfully\n\n');
 

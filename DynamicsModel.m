@@ -206,51 +206,49 @@ classdef (Abstract) DynamicsModel < handle
             grid on;
         end
         
-        function result = cluster(obj, varargin)
-            p = inputParser;
-            addParameter(p, 'time_stamp', obj.currentTime, @isnumeric);
-            parse(p, varargin{:});
-            time_stamp = p.Results.time_stamp;
-
-            raster = obj.stateHistory;
-            adjacency_matrix = obj.net.A;
-            initial_node = 1;
-            current_cluster = {};
-            delete_index = 1;
-            status_index = 1;
-            orig_size = size(raster, 1);
-            while delete_index <= size(adjacency_matrix, 2)
-                if raster(status_index,time_stamp) == 0
-                    adjacency_matrix(delete_index, :) = [];
-                    adjacency_matrix(:, delete_index) = [];
-                    delete_index = delete_index - 1;
-                end
-                delete_index = delete_index + 1;
-                status_index = status_index + 1;
-            end
-            if size(adjacency_matrix, 1) ~= 0 
+        function [final_cluster,num_clusters, cluster_sizes]= find_cluster(obj, time)
+            connectivity = full(logical(obj.net.A >0));
+            status_vector_at_t = obj.stateHistory(:,time);
+            status_vector_at_t = (status_vector_at_t == 1);  % this is column vector
+            final_cluster = obj.find_cluster_at_t(status_vector_at_t', connectivity);  % this is row vector
         
-            [current_cluster{1}, adjacency_matrix] = obj.find_one_cluster(adjacency_matrix, initial_node, orig_size);
-            cluster_index = 2;
-            last_initializer = 1;
-            while true
-                initial_node = obj.find_new_initializer(adjacency_matrix);
-                if initial_node == -1
-                    break;
-                end
-                [current_cluster{cluster_index}, adjacency_matrix] = obj.find_one_cluster(adjacency_matrix, ...
-                    initial_node, orig_size);
-                %%disp(current_cluster{cluster_index});
-                cluster_index = cluster_index + 1;
-                last_initializer = initial_node;
+            if isempty(final_cluster)
+                num_clusters = 0;
+                cluster_sizes = [];
+                return;
             end
-            else
-                current_cluster = [];
-            end
-        
-            result = current_cluster;
             
+            
+            unique_clusters = unique(final_cluster);
+            num_clusters = length(unique_clusters);
+            
+            % Calculate size of each cluster
+            cluster_sizes = arrayfun(@(x) sum(final_cluster == x), unique_clusters);
         end
+
+        function cluster_at_a_time = find_cluster_at_t(obj, status_vector_at_t, connectivity)
+            effective_status_matrix = status_vector_at_t' * status_vector_at_t;
+            effective_connectivity = connectivity .* effective_status_matrix;
+            graph_to_work = graph(effective_connectivity);
+            cluster_at_a_time = conncomp(graph_to_work);
+            excited_indices = find(status_vector_at_t);
+            cluster_at_a_time = cluster_at_a_time(excited_indices);
+        
+            % excited_indices = find(status_vector_at_t);
+            % K = length(excited_indices);
+            % 
+            % if K == 0
+            %     cluster_at_a_time = [];
+            %     return;
+            % end
+            % 
+            % subgraph_connectivity = connectivity(excited_indices, excited_indices);
+            % graph_to_work = graph(subgraph_connectivity);
+            % 
+            % cluster_at_a_time = conncomp(graph_to_work);
+        end
+
+
         
         %will add avalanche profile and branching ratio
         function [avalanche_sizes, avalanche_durations] = avalanche(obj, stateHistory)
@@ -323,318 +321,274 @@ classdef (Abstract) DynamicsModel < handle
             result = count / total;      % relative frequency
         end
 
-        function result = find_new_initializer(obj,adjacency_matrix)
-            result = -1;
-            % Find first node not in any existing cluster
-            if size(adjacency_matrix, 1) > 0
-                result = 1;
-            end
-        end
         
-        function [result, new_adjacency] = find_one_cluster(obj, adjacency_matrix, initial_node, orig_size)
-            node_index = initial_node;
-            index = 1;
-            result = [initial_node];
-            while true
-                neighbors = obj.find_new_neighbors(adjacency_matrix, node_index, result);
-                addition_to_cluster = [];
-                for i = 1: length(neighbors)
-                    if neighbors(i) ~= 0
-                    addition_to_cluster = [addition_to_cluster, neighbors(i)];
-                    else
-                        break;
-                    end
-                end
-                result = [result, addition_to_cluster];
-                index = index + 1;
-                if index <= length(result)
-                    node_index = result(index);
-                else
-                    break;
-                end
-            end
-            for i = 1:length(result)
-                result(i) = result(i) + orig_size - size(adjacency_matrix, 2);
-            end
-            delete_param = orig_size - size(adjacency_matrix, 2);
-            result = sort(result, 'ascend');
-            for index = 1:length(result)
-                if size(adjacency_matrix, 1) ~= 1 
-                    adjacency_matrix(result(index) - delete_param, :) = [];
-                    adjacency_matrix(:, result(index) - delete_param) = [];
-                    delete_param = delete_param + 1;
-                else
-                    adjacency_matrix = [];
-                end
-            end
-        
-            new_adjacency = adjacency_matrix;
-        end
+
         
         %% the function below returns the indexes of the nodes that are connected
         %% to a specified node. 
-        function result = find_new_neighbors(obj, adjacency_matrix, node_index, ...
-            current_cluster)
-           result = zeros(1, size(adjacency_matrix, 2));
-           result_index = 1;
-           for i = 1:length(result)
-               connectivity_value = adjacency_matrix(node_index, i);
-               if connectivity_value > 0 && ~ismember(i, current_cluster)
-                   result(result_index) = i;
-                   result_index = result_index + 1;
-               end
-           end
-
-
-        end
 
         
       %% Functions to animate network graphics        
         
-      function animateNetworkActivity(obj, varargin)
-        % VISUALIZE_NETWORK_DYNAMICS Creates an interactive visualization of network node states
-        %
-        % Inputs:
-        %   positions - N x 3 matrix of node positions [x, y, z]
-        %   states    - N x M matrix of node states (0 or 1) over M time steps
-        %   varargin  - optional parameter-value pairs:
-        %               'FrameRate', value - frames per second (default: 5)
-        %               'NodeSize', value  - size of nodes (default: 50)
-        %               'AutoPlay', true/false - start animation automatically (default: true)
-        %               'Loop', true/false - loop animation (default: true)
-        %
-        % Example:
-        %   visualize_network_dynamics(pos, states, 'FrameRate', 10, 'NodeSize', 100)
-        %
-        % Controls:
-        %   - Play/Pause button to control animation
-        %   - Slider to manually navigate through time steps
-        %   - Speed control slider
-        %   - Reset button to return to first frame
-        states = obj.stateHistory;
-        positions = obj.net.coords;
-        % Parse optional arguments
-        p = inputParser;
-        addParameter(p, 'FrameRate', 10, @isnumeric);
-        addParameter(p, 'NodeSize', 100, @isnumeric);
-        addParameter(p, 'AutoPlay', true, @islogical);
-        addParameter(p, 'Loop', true, @islogical);
-        parse(p, varargin{:});
+        function animateNetworkActivity(obj, varargin)
+    % VISUALIZE_NETWORK_DYNAMICS Creates an interactive visualization of network node states
+    %
+    % Inputs:
+    %   positions - N x 3 matrix of node positions [x, y, z]
+    %   states    - N x M matrix of node states (0 or 1) over M time steps
+    %   varargin  - optional parameter-value pairs:
+    %               'FrameRate', value - frames per second (default: 5)
+    %               'NodeSize', value  - size of nodes (default: 50)
+    %               'AutoPlay', true/false - start animation automatically (default: true)
+    %               'Loop', true/false - loop animation (default: true)
+    %
+    % Example:
+    %   visualize_network_dynamics(pos, states, 'FrameRate', 10, 'NodeSize', 100)
+    %
+    % Controls:
+    %   - Play/Pause button to control animation
+    %   - Slider to manually navigate through time steps
+    %   - Speed control slider
+    %   - Reset button to return to first frame
+    states = obj.stateHistory;
+    positions = obj.net.coords;
+    A = obj.net.A;  % Get adjacency matrix
+    if isempty(positions)
+        x = 10 * rand(N, 1);
+        y = 10 * rand(N, 1);
+        positions = [x y];
+    end
+    % Parse optional arguments
+    p = inputParser;
+    addParameter(p, 'FrameRate', 10, @isnumeric);
+    addParameter(p, 'NodeSize', 100, @isnumeric);
+    addParameter(p, 'AutoPlay', true, @islogical);
+    addParameter(p, 'Loop', true, @islogical);
+    parse(p, varargin{:});
+    
+    frame_rate = p.Results.FrameRate;
+    node_size = p.Results.NodeSize;
+    auto_play = p.Results.AutoPlay;
+    loop_animation = p.Results.Loop;
+    
+    % Get dimensions
+    [N, ~] = size(positions);
+    [~, M] = size(states);
+    
+    % Create figure with controls
+    fig = figure('Position', [100, 100, 900, 700], 'Name', 'Network Dynamics Animation', ...
+                 'NumberTitle', 'off', 'MenuBar', 'none', 'ToolBar', 'figure');
+    set(fig, 'Color', 'white');
+    
+    % Create main plot area
+    main_panel = uipanel('Parent', fig, 'Position', [0, 0.15, 1, 0.85], ...
+                        'BackgroundColor', 'white', 'BorderType', 'none');
+    
+    % Create control panel
+    control_panel = uipanel('Parent', fig, 'Position', [0, 0, 1, 0.15], ...
+                           'BackgroundColor', [0.94, 0.94, 0.94], 'BorderType', 'line');
+    
+    % Set up axes in main panel
+    ax = axes('Parent', main_panel, 'Position', [0.1, 0.1, 0.8, 0.8]);
+    hold(ax, 'on');
+    
+    % 2D plot
+    axis equal;
+    grid on;
+    xlabel('X Position');
+    ylabel('Y Position');
+    title('Network Node Dynamics (2D)');
+    
+    % Set axis limits with some padding
+    x_range = [min(positions(:,1)), max(positions(:,1))];
+    y_range = [min(positions(:,2)), max(positions(:,2))];
+    x_padding = 0.1 * (x_range(2) - x_range(1));
+    y_padding = 0.1 * (y_range(2) - y_range(1));
+    if x_padding == 0, x_padding = 1; end
+    if y_padding == 0, y_padding = 1; end
+    xlim([x_range(1) - x_padding, x_range(2) + x_padding]);
+    ylim([y_range(1) - y_padding, y_range(2) + y_padding]);
+    
+    % Draw edges (connections) first so they appear behind nodes
+    edge_handles = [];
+    [row, col] = find(triu(A, 1));  % Get upper triangular to avoid duplicates
+    for i = 1:length(row)
+        x_coords = [positions(row(i), 1), positions(col(i), 1)];
+        y_coords = [positions(row(i), 2), positions(col(i), 2)];
+        edge_handles(i) = plot(ax, x_coords, y_coords, '-', 'Color', [0.7, 0.7, 0.7], ...
+                              'LineWidth', 0.2);
+    end
+    
+    % Initialize scatter plot handle
+    scatter_handle = scatter(ax, positions(:,1), positions(:,2), node_size, ...
+                               'filled', 'MarkerEdgeColor', 'black', 'LineWidth', 1);
+    
+    % Add time step counter
+    time_text = text(ax, 0.02, 0.95, '', 'Units', 'normalized', 'FontSize', 14, ...
+                     'FontWeight', 'bold', 'BackgroundColor', 'white', ...
+                     'EdgeColor', 'black', 'Margin', 5);
+    
+    hold(ax, 'off');
+    
+    % Create UI controls
+    button_height = 0.4;
+    button_y = 0.3;
+    
+    % Play/Pause button
+    play_button = uicontrol('Parent', control_panel, 'Style', 'pushbutton', ...
+                           'String', 'Pause', 'Position', [20, button_y*50, 80, button_height*50], ...
+                           'FontSize', 10, 'FontWeight', 'bold');
+    
+    % Reset button
+    reset_button = uicontrol('Parent', control_panel, 'Style', 'pushbutton', ...
+                            'String', 'Reset', 'Position', [110, button_y*50, 60, button_height*50], ...
+                            'FontSize', 10);
+    
+    % Time slider
+    uicontrol('Parent', control_panel, 'Style', 'text', 'String', 'Time Step:', ...
+              'Position', [180, button_y*50+20, 80, 20], 'FontSize', 10, ...
+              'BackgroundColor', [0.94, 0.94, 0.94]);
+    
+    time_slider = uicontrol('Parent', control_panel, 'Style', 'slider', ...
+                           'Min', 1, 'Max', M, 'Value', 1, ...
+                           'Position', [270, button_y*50, 300, button_height*50], ...
+                           'SliderStep', [1/(M-1), 10/(M-1)]);
+    
+    % Speed control
+    uicontrol('Parent', control_panel, 'Style', 'text', 'String', 'Speed (fps):', ...
+              'Position', [580, button_y*50+20, 80, 20], 'FontSize', 10, ...
+              'BackgroundColor', [0.94, 0.94, 0.94]);
+    
+    speed_slider = uicontrol('Parent', control_panel, 'Style', 'slider', ...
+                            'Min', 1, 'Max', 20, 'Value', frame_rate, ...
+                            'Position', [670, button_y*50, 150, button_height*50], ...
+                            'SliderStep', [1/19, 5/19]);
+    
+    % Speed display
+    speed_text = uicontrol('Parent', control_panel, 'Style', 'text', ...
+                          'String', sprintf('%.1f', frame_rate), ...
+                          'Position', [830, button_y*50, 40, button_height*50], ...
+                          'FontSize', 10, 'BackgroundColor', 'white');
+    
+    % Animation state variables
+    current_frame = 1;
+    is_playing = auto_play;
+    animation_timer = [];
+    
+    % Function to update display
+    function update_display(frame_num)
+        if frame_num < 1, frame_num = 1; end
+        if frame_num > M, frame_num = M; end
         
-        frame_rate = p.Results.FrameRate;
-        node_size = p.Results.NodeSize;
-        auto_play = p.Results.AutoPlay;
-        loop_animation = p.Results.Loop;
+        current_frame = frame_num;
         
-        % Get dimensions
-        [N, ~] = size(positions);
-        [~, M] = size(states);
+        % Update node colors based on states
+        colors = zeros(N, 3);
+        inactive_nodes = states(:, current_frame) == 0;
+        quiscent_nodes = states(:, current_frame) == 1;
+        excited_nodes = states(:, current_frame) == 2;
+        colors(inactive_nodes, :) = repmat([1, 1, 1], sum(inactive_nodes), 1);
+        colors(excited_nodes, :) = repmat([1, 0, 0], sum(excited_nodes), 1);
         
-
-        % Create figure with controls
-        fig = figure('Position', [100, 100, 900, 700], 'Name', 'Network Dynamics Animation', ...
-                     'NumberTitle', 'off', 'MenuBar', 'none', 'ToolBar', 'figure');
-        set(fig, 'Color', 'white');
+        % Update scatter plot colors
+        set(scatter_handle, 'CData', colors);
         
-        % Create main plot area
-        main_panel = uipanel('Parent', fig, 'Position', [0, 0.15, 1, 0.85], ...
-                            'BackgroundColor', 'white', 'BorderType', 'none');
+        % Update time counter
+        set(time_text, 'String', sprintf('Time Step: %d/%d', current_frame, M));
         
-        % Create control panel
-        control_panel = uipanel('Parent', fig, 'Position', [0, 0, 1, 0.15], ...
-                               'BackgroundColor', [0.94, 0.94, 0.94], 'BorderType', 'line');
+        % Update slider without triggering callback
+        set(time_slider, 'Value', current_frame);
         
-        % Set up axes in main panel
-        ax = axes('Parent', main_panel, 'Position', [0.1, 0.1, 0.8, 0.8]);
-        
-
-        % 2D plot
-        axis equal;
-        grid on;
-        xlabel('X Position');
-        ylabel('Y Position');
-        title('Network Node Dynamics (2D)');
-        
-        % Set axis limits with some padding
-        x_range = [min(positions(:,1)), max(positions(:,1))];
-        y_range = [min(positions(:,2)), max(positions(:,2))];
-        x_padding = 0.1 * (x_range(2) - x_range(1));
-        y_padding = 0.1 * (y_range(2) - y_range(1));
-        if x_padding == 0, x_padding = 1; end
-        if y_padding == 0, y_padding = 1; end
-        xlim([x_range(1) - x_padding, x_range(2) + x_padding]);
-        ylim([y_range(1) - y_padding, y_range(2) + y_padding]);
-
-        
-        % Initialize scatter plot handle
-
-        scatter_handle = scatter(ax, positions(:,1), positions(:,2), node_size, ...
-                                   'filled', 'MarkerEdgeColor', 'black', 'LineWidth', 1);
-        
-        % Add time step counter
-        time_text = text(ax, 0.02, 0.95, '', 'Units', 'normalized', 'FontSize', 14, ...
-                         'FontWeight', 'bold', 'BackgroundColor', 'white', ...
-                         'EdgeColor', 'black', 'Margin', 5);
-        
-        % Create UI controls
-        button_height = 0.4;
-        button_y = 0.3;
-        
-        % Play/Pause button
-        play_button = uicontrol('Parent', control_panel, 'Style', 'pushbutton', ...
-                               'String', 'Pause', 'Position', [20, button_y*50, 80, button_height*50], ...
-                               'FontSize', 10, 'FontWeight', 'bold');
-        
-        % Reset button
-        reset_button = uicontrol('Parent', control_panel, 'Style', 'pushbutton', ...
-                                'String', 'Reset', 'Position', [110, button_y*50, 60, button_height*50], ...
-                                'FontSize', 10);
-        
-        % Time slider
-        uicontrol('Parent', control_panel, 'Style', 'text', 'String', 'Time Step:', ...
-                  'Position', [180, button_y*50+20, 80, 20], 'FontSize', 10, ...
-                  'BackgroundColor', [0.94, 0.94, 0.94]);
-        
-        time_slider = uicontrol('Parent', control_panel, 'Style', 'slider', ...
-                               'Min', 1, 'Max', M, 'Value', 1, ...
-                               'Position', [270, button_y*50, 300, button_height*50], ...
-                               'SliderStep', [1/(M-1), 10/(M-1)]);
-        
-        % Speed control
-        uicontrol('Parent', control_panel, 'Style', 'text', 'String', 'Speed (fps):', ...
-                  'Position', [580, button_y*50+20, 80, 20], 'FontSize', 10, ...
-                  'BackgroundColor', [0.94, 0.94, 0.94]);
-        
-        speed_slider = uicontrol('Parent', control_panel, 'Style', 'slider', ...
-                                'Min', 1, 'Max', 20, 'Value', frame_rate, ...
-                                'Position', [670, button_y*50, 150, button_height*50], ...
-                                'SliderStep', [1/19, 5/19]);
-        
-        % Speed display
-        speed_text = uicontrol('Parent', control_panel, 'Style', 'text', ...
-                              'String', sprintf('%.1f', frame_rate), ...
-                              'Position', [830, button_y*50, 40, button_height*50], ...
-                              'FontSize', 10, 'BackgroundColor', 'white');
-        
-        % Animation state variables
-        current_frame = 1;
-        is_playing = auto_play;
-        animation_timer = [];
-        
-        % Function to update display
-        function update_display(frame_num)
-            if frame_num < 1, frame_num = 1; end
-            if frame_num > M, frame_num = M; end
-            
-            current_frame = frame_num;
-            
-            % Update node colors based on states
-            colors = zeros(N, 3);
-            inactive_nodes = states(:, current_frame) == 0;
-            quiscent_nodes = states(:, current_frame) == 1;
-            excited_nodes = states(:, current_frame) == 2;
-            colors(inactive_nodes, :) = repmat([1, 1, 1], sum(inactive_nodes), 1);
-            colors(excited_nodes, :) = repmat([1, 0, 0], sum(excited_nodes), 1);
-            
-            % Update scatter plot colors
-            set(scatter_handle, 'CData', colors);
-            
-            % Update time counter
-            set(time_text, 'String', sprintf('Time Step: %d/%d', current_frame, M));
-            
-            % Update slider without triggering callback
-            set(time_slider, 'Value', current_frame);
-            
-            drawnow;
+        drawnow;
+    end
+    
+    % Function to start/stop animation
+    function toggle_animation()
+        if is_playing
+            % Stop animation
+            if ~isempty(animation_timer)
+                stop(animation_timer);
+                delete(animation_timer);
+                animation_timer = [];
+            end
+            is_playing = false;
+            set(play_button, 'String', 'Play');
+        else
+            % Start animation
+            current_speed = get(speed_slider, 'Value');
+            animation_timer = timer('ExecutionMode', 'fixedRate', ...
+                                   'Period', 1/current_speed, ...
+                                   'TimerFcn', @animate_step);
+            start(animation_timer);
+            is_playing = true;
+            set(play_button, 'String', 'Pause');
         end
-        
-        % Function to start/stop animation
-        function toggle_animation()
-            if is_playing
-                % Stop animation
-                if ~isempty(animation_timer)
-                    stop(animation_timer);
-                    delete(animation_timer);
-                    animation_timer = [];
-                end
-                is_playing = false;
-                set(play_button, 'String', 'Play');
+    end
+    
+    % Animation step function
+    function animate_step(~, ~)
+        if current_frame >= M
+            if loop_animation
+                current_frame = 1;
             else
-                % Start animation
-                current_speed = get(speed_slider, 'Value');
-                animation_timer = timer('ExecutionMode', 'fixedRate', ...
-                                       'Period', 1/current_speed, ...
-                                       'TimerFcn', @animate_step);
-                start(animation_timer);
-                is_playing = true;
-                set(play_button, 'String', 'Pause');
+                toggle_animation();
+                return;
             end
+        else
+            current_frame = current_frame + 1;
         end
+        update_display(current_frame);
+    end
+    
+    % Callback functions
+    set(play_button, 'Callback', @(~,~) toggle_animation());
+    set(reset_button, 'Callback', @(~,~) update_display(1));
+    set(time_slider, 'Callback', @(src,~) update_display(round(get(src, 'Value'))));
+    set(speed_slider, 'Callback', @(src,~) update_speed_callback(src));
+    
+    function update_speed_callback(src)
+        new_speed = get(src, 'Value');
+        set(speed_text, 'String', sprintf('%.1f', new_speed));
         
-        % Animation step function
-        function animate_step(~, ~)
-            if current_frame >= M
-                if loop_animation
-                    current_frame = 1;
-                else
-                    toggle_animation();
-                    return;
-                end
-            else
-                current_frame = current_frame + 1;
-            end
-            update_display(current_frame);
-        end
-        
-        % Callback functions
-        set(play_button, 'Callback', @(~,~) toggle_animation());
-        set(reset_button, 'Callback', @(~,~) update_display(1));
-        set(time_slider, 'Callback', @(src,~) update_display(round(get(src, 'Value'))));
-        set(speed_slider, 'Callback', @(src,~) update_speed_callback(src));
-        
-        function update_speed_callback(src)
-            new_speed = get(src, 'Value');
-            set(speed_text, 'String', sprintf('%.1f', new_speed));
-            
-            % If animation is playing, restart timer with new speed
-            if is_playing
-                if ~isempty(animation_timer)
-                    stop(animation_timer);
-                    delete(animation_timer);
-                end
-                animation_timer = timer('ExecutionMode', 'fixedRate', ...
-                                       'Period', 1/new_speed, ...
-                                       'TimerFcn', @animate_step);
-                start(animation_timer);
-            end
-        end
-        
-        % Clean up timer when figure is closed
-        set(fig, 'CloseRequestFcn', @cleanup_and_close);
-        
-        function cleanup_and_close(~, ~)
+        % If animation is playing, restart timer with new speed
+        if is_playing
             if ~isempty(animation_timer)
                 stop(animation_timer);
                 delete(animation_timer);
             end
-            delete(fig);
+            animation_timer = timer('ExecutionMode', 'fixedRate', ...
+                                   'Period', 1/new_speed, ...
+                                   'TimerFcn', @animate_step);
+            start(animation_timer);
         end
-        
-        % Initialize display
-        update_display(1);
-        
-        % Start animation if auto_play is enabled
-        if auto_play
-            toggle_animation();
+    end
+    
+    % Clean up timer when figure is closed
+    set(fig, 'CloseRequestFcn', @cleanup_and_close);
+    
+    function cleanup_and_close(~, ~)
+        if ~isempty(animation_timer)
+            stop(animation_timer);
+            delete(animation_timer);
         end
-        
-        fprintf('Network dynamics visualization created.\n');
-        fprintf('Controls:\n');
-        fprintf('  - Play/Pause: Start/stop animation\n');
-        fprintf('  - Reset: Return to first frame\n');
-        fprintf('  - Time Slider: Navigate manually through time steps\n');
-        fprintf('  - Speed Slider: Adjust animation speed (1-20 fps)\n');
-        end
+        delete(fig);
+    end
+    
+    % Initialize display
+    update_display(1);
+    
+    % Start animation if auto_play is enabled
+    if auto_play
+        toggle_animation();
+    end
+    
+    fprintf('Network dynamics visualization created.\n');
+    fprintf('Controls:\n');
+    fprintf('  - Play/Pause: Start/stop animation\n');
+    fprintf('  - Reset: Return to first frame\n');
+    fprintf('  - Time Slider: Navigate manually through time steps\n');
+    fprintf('  - Speed Slider: Adjust animation speed (1-20 fps)\n');
+end
 
 
 

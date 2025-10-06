@@ -5,6 +5,7 @@ classdef GreenbergHastingsModel < DynamicsModel
     properties
         r2              % probability of transitioning from refractory to quiescent
         threshold       % threshold for quiescent nodes to become excited
+        r1      % External excitation probability for quiscent nodes to go excited
     end
     
     properties (Access = private)
@@ -32,6 +33,7 @@ classdef GreenbergHastingsModel < DynamicsModel
             % Set model-specific properties
             obj.r2 = params.r2;
             obj.threshold = params.threshold;
+            obj.r1 = params.r1;
             
             % Validate parameter values
             if obj.r2 < 0 || obj.r2 > 1
@@ -50,8 +52,8 @@ classdef GreenbergHastingsModel < DynamicsModel
                 rng(obj.rngSeed);
             end
             
-            % Initialize all nodes to quiescent state (state 1)
-            obj.state = ones(obj.net.N, 1);
+            % Initialize all nodes to quiescent state (state 2)
+            obj.state = 2*ones(obj.net.N, 1);
             
             % Set initial excitation pattern
             if isfield(obj.params, 'initial_excited')
@@ -92,9 +94,9 @@ classdef GreenbergHastingsModel < DynamicsModel
         function step(obj, t)
             % Perform one time step of Greenberg-Hastings dynamics
             % Rules:
-            % 1. Refractory (0) → Quiescent (1) with probability r2
-            % 2. Excited (2) → Refractory (0) always
-            % 3. Quiescent (1) → Excited (2) if weighted sum of excited neighbors > threshold
+            % 1. Refractory (0) → Quiescent (2) with probability r2
+            % 2. Excited (1) → Refractory (0) always
+            % 3. Quiescent (2) → Excited (1) if weighted sum of excited neighbors > threshold
             
             currentState = obj.state;
             newState = currentState;
@@ -119,9 +121,9 @@ classdef GreenbergHastingsModel < DynamicsModel
             % 2. Excited nodes (state 2) always become refractory (state 0)
             newState(currentState == 1) = 0;
             
-            % 3. Quiescent nodes (state 1) become excited if weighted sum exceeds threshold
+            % 3. Quiescent nodes (state 2) become excited if weighted sum exceeds threshold
             quiescentNodes = (currentState == 2);
-            shouldExcite = (weightedExcitedNeighbors > obj.threshold);
+            shouldExcite = (weightedExcitedNeighbors > obj.threshold) |  (rand(obj.net.N, 1) < obj.r1);
             newState(quiescentNodes & shouldExcite) = 1; % → excited
             newState(quiescentNodes & ~shouldExcite) = 2; % stay quiescent
             
@@ -202,9 +204,8 @@ classdef GreenbergHastingsModel < DynamicsModel
             legendLabels = cell(maxState + 1, 1);
             legendLabels{1} = 'Quiescent';
             legendLabels{2} = 'Excited';
-            for i = 3:maxState + 1
-                legendLabels{i} = sprintf('Refractory %d', i - 2);
-            end
+            legendLabels{3} = sprintf('Refractory');
+
             
             legend(legendLabels, 'Location', 'best');
             xlabel('Time Step');
@@ -242,7 +243,7 @@ classdef GreenbergHastingsModel < DynamicsModel
             ylim([0, 1]);
         end
         
-                function avalanches = detectAvalanches(obj, varargin)
+        function avalanches = detectAvalanches(obj, varargin)
             % Detect avalanche events in the dynamics
             % An avalanche is a sequence of continuous activity above baseline
             
@@ -377,7 +378,8 @@ classdef GreenbergHastingsModel < DynamicsModel
             % Get default parameters for Greenberg-Hastings model
             params = struct();
             params.r2 = 0.01;
-            params.threshold = 0.005;
+            params.threshold = 1.5;
+            params.r1 = 0.001;
             params.initial_excited = 0.1;  % 1% initially excited
             params.seed = 12345;            % reproducible results
         end

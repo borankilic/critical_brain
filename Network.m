@@ -68,7 +68,76 @@ classdef Network < handle
             
             switch lower(ext)
                 case '.txt'
-                    obj.A = load(filepath);
+                     if contains('CAPA', filepath)
+                        % Read the data, skipping the header line
+                        % The file uses multiple spaces/tabs as delimiters
+                        data = readmatrix(filename, 'NumHeaderLines', 1);
+                        
+                        % Check if data was read correctly
+                        if size(data, 2) < 3
+                            error('Data not read correctly. File may have formatting issues.');
+                        end
+                        
+                        % Extract NodeId1, NodeId2, and Weighted Connectivity (column 3)
+                        nodeId1 = data(:, 1);
+                        nodeId2 = data(:, 2);
+                        weightedConnectivity = data(:, 3);
+                        
+                        % Initialize 800x800 matrix with zeros
+                        weightMatrix = zeros(800, 800);
+                        
+                        % Fill the matrix with weighted connectivity values
+                        for i = 1:length(nodeId1)
+       
+                            if nodeId1(i) >= 1001 && nodeId1(i) <= 1400
+                                idx1 = nodeId1(i) - 1000;  % Maps 1001->1, 1400->400
+                            elseif nodeId1(i) >= 2001 && nodeId1(i) <= 2400
+                                idx1 = nodeId1(i) - 1600;  % Maps 2001->401, 2400->800
+                            else
+                                idx1 = 0;  % Invalid node
+                            end
+
+                            if nodeId2(i) >= 1001 && nodeId2(i) <= 1400
+                                idx2 = nodeId2(i) - 1000;  % Maps 1001->1, 1400->400
+                            elseif nodeId2(i) >= 2001 && nodeId2(i) <= 2400
+                                idx2 = nodeId2(i) - 1600;  % Maps 2001->401, 2400->800
+                            else
+                                idx2 = 0;  % Invalid node
+                            end
+                            % Check for valid indices
+                            if idx1 > 0 && idx2 > 0
+                                % Fill upper triangle
+                                weightMatrix(idx1, idx2) = weightedConnectivity(i);
+                                
+                                % Fill lower triangle (symmetric matrix)
+                                weightMatrix(idx2, idx1) = weightedConnectivity(i);
+                            end
+                        end
+                        
+                        % Ensure diagonal is zero (should already be zero from initialization)
+                        weightMatrix(logical(eye(800))) = 0;
+                        
+                        % Display matrix properties
+                        fprintf('Matrix size: %dx%d\n', size(weightMatrix, 1), size(weightMatrix, 2));
+                        fprintf('Number of non-zero elements: %d\n', nnz(weightMatrix));
+                        fprintf('Matrix is symmetric: %d\n', issymmetric(weightMatrix));
+                        fprintf('Diagonal sum (should be 0): %.10f\n', sum(diag(weightMatrix)));
+                        
+                        % Optional: Visualize the matrix
+                        figure;
+                        imagesc(weightMatrix);
+                        colorbar;
+                        title('Weight Matrix (800x800)');
+                        xlabel('Node Index');
+                        ylabel('Node Index');
+                        axis square;
+                        
+                        % Optional: Save the matrix
+                        save('weight_matrix.mat', 'weightMatrix');
+
+
+                     end
+                     
                 case '.csv'
                     obj.A = csvread(filepath);
                 case '.mat'
@@ -110,7 +179,11 @@ classdef Network < handle
             end
         end
 
-
+        function normalize_weights(obj)
+            row_sums = sum(obj.A, 2);
+            row_sums(row_sums == 0) = 1;  % avoid divide by zero
+            obj.A = obj.A ./ row_sums;
+        end
         function L = laplacian(obj)
             % Compute graph Laplacian matrix
             d = obj.degree();
@@ -229,6 +302,10 @@ classdef Network < handle
             fprintf('Network saved to %s\n', filepath);
         end
         
+        
+
+
+
         function visualize(obj, varargin)
             % Create input parser with enhanced options
             p = inputParser;
