@@ -43,7 +43,7 @@ for i = 1:10
         fid = fopen('experiment.txt', 'a');
         avg_largest = mean(largest_sizes);
         avg_second_largest = mean(second_largest_sizes);
-        fprintf('Calculated cluster for r2= %.3f, r1= %.3f , threshold=%.3f with largest and 2nd largest cluster size %.3f and %.3f', r2, r1, threshold, avg_largest, avg_second_largest);
+        fprintf('Calculated cluster for r2= %.3f, r1= %.3f , threshold=%3f with largest and 2nd largest cluster size %.3f and second largest  ')
         fprintf(fid, '%f %f %f %f\n', avg_largest, avg_second_largest, r2, threshold);
         fprintf(fid, '\n');  % blank line
         

@@ -353,6 +353,7 @@ classdef (Abstract) DynamicsModel < handle
     states = obj.stateHistory;
     positions = obj.net.coords;
     A = obj.net.A;  % Get adjacency matrix
+    N = size(A,1);
     if isempty(positions)
         x = 10 * rand(N, 1);
         y = 10 * rand(N, 1);
